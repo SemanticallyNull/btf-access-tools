@@ -1,0 +1,42 @@
+version: 2.1
+
+commands:
+  setup:
+    steps:
+      - run:
+          name: Setup tunnel
+          command: |
+            set -eu -o pipefail
+            tunnel_file="$(mktemp)"
+            ip="$(curl --fail https://checkip.amazonaws.com/)"
+            curl -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${CIRCLE_OIDC_TOKEN_V2}" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"ssh_'$CIRCLE_WORKFLOW_JOB_ID'","addr":"172.31.35.20:7998","proto":"tcp","ip_restriction":{"allow_cidrs":["'$ip'/32"]}}' \
+              --fail -o $tunnel_file \
+              "${CIRCLE_AGENT_ADDRESS}/api/tunnels"
+
+            export REPO_PATH="${CIRCLE_REPO_URL#*:}"
+            echo "export REPO_URL=\"$(jq -r '.public_url' $tunnel_file | sed 's/tcp\:\/\//ssh:\/\/git@/')/$REPO_PATH\"" >> $BASH_ENV
+            echo "export TCP_ADDR=\"$(jq -r '.public_url' $tunnel_file | sed 's/tcp\:\/\/\(.*\):\(.*\)/\1/')\"" >> $BASH_ENV
+            echo "export TCP_PORT=\"$(jq -r '.public_url' $tunnel_file | sed 's/tcp\:\/\/\(.*\):\(.*\)/\2/')\"" >> $BASH_ENV
+  checkout:
+    steps:
+      - run:
+          name: Clone repo
+          command: |
+            mkdir ~/.ssh || true
+            ssh-keyscan -p $TCP_PORT $TCP_ADDR >> ~/.ssh/known_hosts
+            GIT_TERMINAL_PROMPT=0 git clone $REPO_URL
+  cleanup:
+    steps:
+      - run:
+          name: Cleanup tunnel
+          command: |
+            set -eu -o pipefail
+            curl -H 'Accept: application/json' \
+              -H "Authorization: Bearer ${CIRCLE_OIDC_TOKEN_V2}" \
+              -H "Content-Type: application/json" \
+              -X DELETE \
+              --fail \
+              "${CIRCLE_AGENT_ADDRESS}/api/tunnels/ssh_${CIRCLE_WORKFLOW_JOB_ID}"
